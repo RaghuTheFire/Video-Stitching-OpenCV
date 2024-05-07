@@ -1,119 +1,142 @@
 
-// Importing necessary libraries
+// Imported necessary libraries
 #include <QApplication>
 #include <QMainWindow>
-#include <QLabel>
-#include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QPushButton>
 #include <QLineEdit>
+#include <QTextEdit>
 #include <QFileDialog>
-#include <QMessageBox>
-#include <QTimer>
-#include <QVideoWidget>
-#include <QMediaPlayer>
+#include <opencv2/opencv.hpp>
+#include <opencv2/videoio.hpp>
+#include <opencv2/video.hpp>
 
-// Class for video GUI
 class VideoGUI : public QMainWindow {
     Q_OBJECT
 
 public:
     VideoGUI(QWidget* parent = nullptr) : QMainWindow(parent) {
-        // Set window title
-        setWindowTitle("Video Stitching");
-
-        // Create top frame
-        QWidget* topFrame = new QWidget(this);
-        QVBoxLayout* topLayout = new QVBoxLayout(topFrame);
-
-        // Create video widget
-        videoWidget = new QVideoWidget(topFrame);
-        topLayout->addWidget(videoWidget);
-
-        // Create bottom frame
-        QWidget* bottomFrame = new QWidget(this);
-        QHBoxLayout* bottomLayout = new QHBoxLayout(bottomFrame);
-
-        // Create file path label and line edit
-        QLabel* filePathLabel = new QLabel("File Path: ", this);
-        filePathLineEdit = new QLineEdit(this);
-        bottomLayout->addWidget(filePathLabel);
-        bottomLayout->addWidget(filePathLineEdit);
-
-        // Create select button
-        QPushButton* selectButton = new QPushButton("SELECT", this);
-        connect(selectButton, &QPushButton::clicked, this, &VideoGUI::openFile);
-        bottomLayout->addWidget(selectButton);
-
-        // Create play button
-        QPushButton* playButton = new QPushButton("PLAY", this);
-        connect(playButton, &QPushButton::clicked, this, &VideoGUI::playVideo);
-        bottomLayout->addWidget(playButton);
-
-        // Create pause button
-        QPushButton* pauseButton = new QPushButton("PAUSE", this);
-        connect(pauseButton, &QPushButton::clicked, this, &VideoGUI::pauseVideo);
-        bottomLayout->addWidget(pauseButton);
-
-        // Create resume button
-        QPushButton* resumeButton = new QPushButton("RESUME", this);
-        connect(resumeButton, &QPushButton::clicked, this, &VideoGUI::resumeVideo);
-        bottomLayout->addWidget(resumeButton);
-
-        // Set central widget
+        // Create main layout
         QWidget* centralWidget = new QWidget(this);
         QVBoxLayout* mainLayout = new QVBoxLayout(centralWidget);
-        mainLayout->addWidget(topFrame);
-        mainLayout->addWidget(bottomFrame);
+
+        // Create path text area
+        pathTextArea = new QTextEdit(this);
+        pathTextArea->setReadOnly(true);
+        mainLayout->addWidget(pathTextArea);
+
+        // Create button layout
+        QHBoxLayout* buttonLayout = new QHBoxLayout();
+
+        // Create select button
+        QPushButton* selectButton = new QPushButton("Select", this);
+        connect(selectButton, &QPushButton::clicked, this, &VideoGUI::openFileDialog);
+        buttonLayout->addWidget(selectButton);
+
+        // Create stitch row button
+        QPushButton* stitchRowButton = new QPushButton("Stitch in Rows", this);
+        connect(stitchRowButton, &QPushButton::clicked, this, &VideoGUI::stitchInRows);
+        buttonLayout->addWidget(stitchRowButton);
+
+        // Create stitch column button
+        QPushButton* stitchColButton = new QPushButton("Stitch in Columns", this);
+        connect(stitchColButton, &QPushButton::clicked, this, &VideoGUI::stitchInColumns);
+        buttonLayout->addWidget(stitchColButton);
+
+        mainLayout->addLayout(buttonLayout);
+
         setCentralWidget(centralWidget);
-
-        // Create media player
-        mediaPlayer = new QMediaPlayer(this);
-        mediaPlayer->setVideoOutput(videoWidget);
-
-        // Connect media player signals
-        connect(mediaPlayer, &QMediaPlayer::stateChanged, this, &VideoGUI::handleStateChanged);
     }
 
 private slots:
-    void openFile() {
-        QString fileName = QFileDialog::getOpenFileName(this, "Select Video File");
-        if (!fileName.isEmpty()) {
-            filePathLineEdit->setText(fileName);
-            mediaPlayer->setMedia(QUrl::fromLocalFile(fileName));
+    void openFileDialog() {
+        pathList = QFileDialog::getOpenFileNames(this, "Select Video Files", "", "Video Files (*.mp4 *.avi *.mov)");
+        pathTextArea->clear();
+        pathTextArea->insertPlainText(pathList.join("\n"));
+    }
+
+    void stitchInRows() {
+        std::vector<cv::VideoCapture> clipList;
+        for (const QString& path : pathList) {
+            clipList.emplace_back(path.toStdString());
+        }
+
+        std::vector<cv::VideoWriter> writers;
+        for (const auto& clip : clipList) {
+            cv::VideoWriter writer("row_stitch.mp4", cv::VideoWriter::fourcc('m', 'p', '4', 'v'), clip.get(cv::CAP_PROP_FPS), cv::Size(clip.get(cv::CAP_PROP_FRAME_WIDTH), clip.get(cv::CAP_PROP_FRAME_HEIGHT)));
+            writers.push_back(writer);
+        }
+
+        cv::Mat frame;
+        while (true) {
+            bool allEmpty = true;
+            for (size_t i = 0; i < clipList.size(); ++i) {
+                if (clipList[i].read(frame)) {
+                    allEmpty = false;
+                    writers[i].write(frame);
+                }
+            }
+            if (allEmpty) {
+                break;
+            }
+        }
+
+        for (auto& writer : writers) {
+            writer.release();
         }
     }
 
-    void playVideo() {
-        mediaPlayer->play();
-    }
-
-    void pauseVideo() {
-        mediaPlayer->pause();
-    }
-
-    void resumeVideo() {
-        mediaPlayer->play();
-    }
-
-    void handleStateChanged(QMediaPlayer::State state) {
-        if (state == QMediaPlayer::StoppedState) {
-            QMessageBox::information(this, "Video Finished", "Video playback has finished.");
+    void stitchInColumns() {
+        std::vector<cv::VideoCapture> clipList;
+        for (const QString& path : pathList) {
+            clipList.emplace_back(path.toStdString());
         }
+
+        cv::VideoWriter writer;
+        int totalHeight = 0;
+        int maxWidth = 0;
+        for (const auto& clip : clipList) {
+            totalHeight += clip.get(cv::CAP_PROP_FRAME_HEIGHT);
+            maxWidth = std::max(maxWidth, static_cast<int>(clip.get(cv::CAP_PROP_FRAME_WIDTH)));
+        }
+
+        writer.open("col_stitch.mp4", cv::VideoWriter::fourcc('m', 'p', '4', 'v'), clipList[0].get(cv::CAP_PROP_FPS), cv::Size(maxWidth, totalHeight));
+
+        std::vector<cv::Mat> frames(clipList.size());
+        cv::Mat output(totalHeight, maxWidth, CV_8UC3);
+
+        while (true) {
+            bool allEmpty = true;
+            int y = 0;
+            for (size_t i = 0; i < clipList.size(); ++i) {
+                if (clipList[i].read(frames[i])) {
+                    allEmpty = false;
+                    cv::Rect roi(0, y, frames[i].cols, frames[i].rows);
+                    frames[i].copyTo(output(roi));
+                    y += frames[i].rows;
+                }
+            }
+            if (allEmpty) {
+                break;
+            }
+            writer.write(output);
+        }
+
+        writer.release();
     }
 
 private:
-    QVideoWidget* videoWidget;
-    QLineEdit* filePathLineEdit;
-    QMediaPlayer* mediaPlayer;
+    QStringList pathList;
+    QTextEdit* pathTextArea;
 };
 
-// Main function
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
-
     VideoGUI videoGUI;
     videoGUI.show();
-
     return app.exec();
 }
+
+
+
